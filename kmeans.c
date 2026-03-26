@@ -5,26 +5,36 @@
 #include "farfirst.h"
 
 // Finds the nearest cluster to a point
-int find_cluster (double* kmeans, double* point, int k, int dim) {
+int find_cluster (double* kmeans, double* point, int k, int dim, int numthreads) {
+    omp_set_num_threads(numthreads);
     int cluster = 0;
     double low_dist = DBL_MAX;
 
-    //Find the closest cluster 
-    for(int i = 0; i < k; i++){
-        double dist = vec_dist_sq(point, kmeans + i*dim, dim);
-        if(dist < low_dist){
-            low_dist = dist;
-            cluster = i;
-        }
-    }
 
-    return cluster;
+    #pragma omp parallel
+        {
+            double thread_low_dist = low_dist;
+            #pragma omp for
+            //Find the closest cluster
+            for(int i = 0; i < k; i++){
+                double dist = vec_dist_sq(point, kmeans + i*dim, dim);
+                if(dist < low_dist){
+                    thread_low_dist = dist;
+                    cluster = i;
+                }
+            }
+        #pragma omp critical
+        if(thread_low_dist < low_dist)
+            low_dist = thread_low_dist;
+
+        return cluster;
+        }
 }
 
 // calculate the next kmeans
 void calc_kmeans_next (double* data, int num_points, int dim, double* kmeans, double* kmeans_next, int k) {
     double cost = 0;
-    
+
     // Array that tracks the cluster assigned to each point
     int* point_clusters = calloc(num_points, sizeof(int));
 
@@ -49,7 +59,7 @@ void calc_kmeans_next (double* data, int num_points, int dim, double* kmeans, do
         // Adds the to the sum of points for the current cluster
         for (int d = 0; d < dim; d++)
 
-            //Add to the sum for each coordinate 
+            //Add to the sum for each coordinate
             sums[cluster*dim + d] += curr_pt[d];
 
         // Add to the total cost
