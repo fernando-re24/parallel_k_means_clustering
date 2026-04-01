@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include "../include/vec.h"
 
 // v = 0
 void vec_zero (double* v, int dim) {

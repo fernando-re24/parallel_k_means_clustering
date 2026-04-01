@@ -2,8 +2,8 @@
 #include <stdlib.h>
 #include <float.h>
 #include <omp.h>
-#include "vec.h"
-#include "farfirst.h"
+#include "../include/vec.h"
+#include "../include/farfirst.h"
 
 // Finds the nearest cluster to a point
 int find_cluster (double* kmeans, double* point, int k, int dim) {
@@ -98,7 +98,12 @@ void calc_kmeans_next (double* data, int num_points, int dim, double* kmeans, do
 }
 
 // calculate kmeans using m steps of Lloyd's algorithm
-void calc_kmeans (double* data, int num_points, int dim, double* kmeans, int k, int m) {
+// num_threads: number of OpenMP threads (0 = system default)
+void calc_kmeans (double* data, int num_points, int dim, double* kmeans, int k, int m, int num_threads) {
+
+    // Set the number of OpenMP threads if specified
+    if (num_threads > 0)
+        omp_set_num_threads(num_threads);
 
     // find k centers using the farthest first algorithm
     int centers[k];

@@ -1,62 +1,65 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <float.h>
-#include "vec.h"
-#include "ffirst_fast.h"
+#include <omp.h>
+#include "../include/vec.h"
+#include "../include/farfirst.h"
 
-int main(int argc, char* argv[]){
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s k < inputfile\n", argv[0]);
-        return 1;
+// Farthest-first initialization: greedily picks k centers
+// by always choosing the point farthest from any existing center.
+void farfirst(double* data, int num_points, int dim, int* centers, int k) {
+
+    // min_dist[i] = distance from point i to its nearest chosen center
+    double* min_dist = malloc(num_points * sizeof(double));
+
+    // First center is point 0
+    centers[0] = 0;
+
+    // Initialize all distances to distance from point 0
+    #pragma omp parallel for
+    for (int i = 0; i < num_points; i++) {
+        min_dist[i] = vec_dist_sq(data + i*dim, data + centers[0]*dim, dim);
     }
 
-    int k = atoi(argv[1]);
-    if (k <= 0) {
-        fprintf(stderr, "Error: k must be positive.\n");
-        return 1;
-    }
+    // Greedily pick k-1 more centers
+    for (int c = 1; c < k; c++) {
 
-    int len, dim;
-    if (scanf("%d %d", &len, &dim) != 2) {
-        fprintf(stderr, "Error: failed to read len and dim from input.\n");
-        return 1;
-    }
+        // Find the point farthest from any chosen center (parallel reduction)
+        int farthest = 0;
+        double max_dist = -1.0;
 
-    double* data = (double*)malloc(sizeof(double)*len*dim);
-    if (!data) { printf("malloc failed for data\n"); return 1; }
-    vec_read_dataset(data, len, dim);
+        #pragma omp parallel
+        {
+            int local_farthest = 0;
+            double local_max = -1.0;
 
-    int* final_centers = malloc(sizeof(int) * k);
-    if (!final_centers){ printf("malloc failed for final_centers\n"); return 1; }
+            #pragma omp for
+            for (int i = 0; i < num_points; i++) {
+                if (min_dist[i] > local_max) {
+                    local_max = min_dist[i];
+                    local_farthest = i;
+                }
+            }
 
-    double final_cost = DBL_MAX;
-
-    // Try every point as the starting center
-    for (int i = 0; i < len; i++){
-        int* curr_centers = malloc(sizeof(int) * k);
-        if (!curr_centers){ printf("malloc failed for curr_centers\n"); return 1; }
-
-        double cost = farthest_first(data, len, dim, k, curr_centers, i);
-
-        if (cost < final_cost){
-            final_cost = cost;
-            // Copy the centers to final_centers
-            for (int j = 0; j < k; j++) {
-                final_centers[j] = curr_centers[j];
+            #pragma omp critical
+            {
+                if (local_max > max_dist) {
+                    max_dist = local_max;
+                    farthest = local_farthest;
+                }
             }
         }
 
-        free(curr_centers);
+        centers[c] = farthest;
+
+        // Update min_dist: for each point, check if the new center is closer
+        #pragma omp parallel for
+        for (int i = 0; i < num_points; i++) {
+            double d = vec_dist_sq(data + i*dim, data + centers[c]*dim, dim);
+            if (d < min_dist[i])
+                min_dist[i] = d;
+        }
     }
 
-    printf("Approximate minimal cost = %lf\n", final_cost);
-    printf("Approximate optimal Centers: ");
-    for(int i = 0; i < k; i++){
-        printf("%d ", final_centers[i]);
-    }
-    printf("\n");
-
-    free(data);
-    free(final_centers);
-    return 0;
+    free(min_dist);
 }
