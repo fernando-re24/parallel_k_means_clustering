@@ -1,34 +1,24 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <float.h>
+#include <omp.h>
 #include "vec.h"
 #include "farfirst.h"
 
 // Finds the nearest cluster to a point
-int find_cluster (double* kmeans, double* point, int k, int dim, int numthreads) {
-    omp_set_num_threads(numthreads);
+int find_cluster (double* kmeans, double* point, int k, int dim) {
     int cluster = 0;
     double low_dist = DBL_MAX;
 
-
-    #pragma omp parallel
-        {
-            double thread_low_dist = low_dist;
-            #pragma omp for
-            //Find the closest cluster
-            for(int i = 0; i < k; i++){
-                double dist = vec_dist_sq(point, kmeans + i*dim, dim);
-                if(dist < low_dist){
-                    thread_low_dist = dist;
-                    cluster = i;
-                }
-            }
-        #pragma omp critical
-        if(thread_low_dist < low_dist)
-            low_dist = thread_low_dist;
-
-        return cluster;
+    for (int i = 0; i < k; i++) {
+        double dist = vec_dist_sq(point, kmeans + i*dim, dim);
+        if (dist < low_dist) {
+            low_dist = dist;
+            cluster = i;
         }
+    }
+
+    return cluster;
 }
 
 // calculate the next kmeans
@@ -43,27 +33,47 @@ void calc_kmeans_next (double* data, int num_points, int dim, double* kmeans, do
     int* counts = calloc(k, sizeof(int));
 
     // Assigns each point to a cluster & adds to the cost calculation
-    for(int i = 0; i < num_points; i++){
+    #pragma omp parallel
+    {
+        // Thread-local accumulators to avoid contention in the hot loop
+        double* local_sums = calloc(k * dim, sizeof(double));
+        int* local_counts = calloc(k, sizeof(int));
+        double local_cost = 0.0;
 
-        // Variable for the current point for readability
-        double* curr_pt = data + i*dim;
+        #pragma omp for
+        for (int i = 0; i < num_points; i++) {
 
-        // Finds the nearest cluster
-        int cluster = find_cluster(kmeans, curr_pt, k, dim);
+            // Variable for the current point for readability
+            double* curr_pt = data + i*dim;
 
-        // Records the cluster that was chosen for the ith point & increments
-        // the count of points in that cluster
-        point_clusters[i] = cluster;
-        counts[cluster]++;
+            // Finds the nearest cluster
+            int cluster = find_cluster(kmeans, curr_pt, k, dim);
 
-        // Adds the to the sum of points for the current cluster
-        for (int d = 0; d < dim; d++)
+            // Records the cluster that was chosen for the ith point & increments
+            // the count of points in that cluster
+            point_clusters[i] = cluster;
+            local_counts[cluster]++;
 
-            //Add to the sum for each coordinate
-            sums[cluster*dim + d] += curr_pt[d];
+            // Adds the to the sum of points for the current cluster
+            for (int d = 0; d < dim; d++)
+                local_sums[cluster*dim + d] += curr_pt[d];
 
-        // Add to the total cost
-        cost += vec_dist_sq(curr_pt, kmeans + cluster*dim, dim);
+            // Add to the total cost
+            local_cost += vec_dist_sq(curr_pt, kmeans + cluster*dim, dim);
+        }
+
+        // Merge thread-local results into shared arrays
+        #pragma omp critical
+        {
+            for (int j = 0; j < k * dim; j++)
+                sums[j] += local_sums[j];
+            for (int j = 0; j < k; j++)
+                counts[j] += local_counts[j];
+            cost += local_cost;
+        }
+
+        free(local_sums);
+        free(local_counts);
     }
 
     // Compute new means by iterating through the clusters & finding the mean point
